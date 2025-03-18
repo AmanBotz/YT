@@ -17,7 +17,7 @@ download_lock = asyncio.Lock()
 progress_last_update = {}
 # Store user-specific cookies file paths.
 user_cookies = {}
-# Map unique tokens (32-char hex) to download request details.
+# Map unique tokens (32-character hex) to download request details.
 download_requests = {}
 
 # Provided API credentials (API_ID as integer)
@@ -35,6 +35,10 @@ app = Client("yt_dlp_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 # Health Check Server
 # ---------------------------
 class HealthHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+        
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -251,7 +255,7 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
-    # Validate thumbnail: only use it if it exists and is non-empty.
+    # Check if thumbnail exists and is non-empty.
     thumb = thumbnail_path if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0 else None
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
@@ -263,16 +267,16 @@ async def download_format(client, callback_query):
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
+        # Pass thumb as file path (if valid), else omit thumb parameter.
         if info.get("ext") in ["mp3", "m4a", "webm"]:
             if thumb:
-                with open(thumb, "rb") as fthumb:
-                    await client.send_audio(
-                        chat_id=callback_query.message.chat.id,
-                        audio=file_path,
-                        thumb=fthumb,
-                        caption=caption,
-                        progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
-                    )
+                await client.send_audio(
+                    chat_id=callback_query.message.chat.id,
+                    audio=file_path,
+                    thumb=thumb,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
             else:
                 await client.send_audio(
                     chat_id=callback_query.message.chat.id,
@@ -282,14 +286,13 @@ async def download_format(client, callback_query):
                 )
         else:
             if thumb:
-                with open(thumb, "rb") as fthumb:
-                    await client.send_video(
-                        chat_id=callback_query.message.chat.id,
-                        video=file_path,
-                        thumb=fthumb,
-                        caption=caption,
-                        progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
-                    )
+                await client.send_video(
+                    chat_id=callback_query.message.chat.id,
+                    video=file_path,
+                    thumb=thumb,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
             else:
                 await client.send_video(
                     chat_id=callback_query.message.chat.id,
