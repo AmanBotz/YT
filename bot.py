@@ -2,6 +2,7 @@ import os
 import asyncio
 import shutil
 import subprocess
+import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
@@ -9,11 +10,13 @@ import ffmpeg
 
 # Global asynchronous lock for download/disk operations.
 download_lock = asyncio.Lock()
+# Dictionary to store last progress update timestamp per message id.
+progress_last_update = {}
 
 # Provided API credentials (API_ID as integer)
 API_ID = 23288918
 API_HASH = "fd2b1b2e0e6b2addf6e8031f15e511f2"
-# Set your bot token here or via an environment variable.
+# Set your bot token here or via environment variable.
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 
 app = Client("yt_dlp_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -27,7 +30,7 @@ def check_disk_space(required_bytes):
     return free >= required_bytes
 
 def to_small_caps(text):
-    """Convert letters to small caps using available Unicode equivalents."""
+    """Convert letters to small caps using Unicode equivalents."""
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ',
         'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ',
@@ -38,13 +41,17 @@ def to_small_caps(text):
     return "".join(small_caps_map.get(ch.lower(), ch) for ch in text)
 
 def progress_callback(current, total, message, action="Downloading"):
-    """Update progress message with an emoji-based progress bar."""
-    percent = (current / total) * 100 if total else 0
-    bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-    try:
-        message.edit_text(f"{action}... {bar} {percent:.2f}%")
-    except Exception:
-        pass
+    """Update progress message with an emoji progress bar, limited to one update every 10 seconds."""
+    now = time.time()
+    msg_id = message.message_id
+    if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
+        progress_last_update[msg_id] = now
+        percent = (current / total) * 100 if total else 0
+        bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
+        try:
+            message.edit_text(f"{action}... {bar} {percent:.2f}%")
+        except Exception:
+            pass
 
 def get_formats(url):
     """Extract video/audio formats using yt-dlp."""
@@ -94,9 +101,8 @@ def handle_url(client, message):
         message.reply_text("Please provide a valid URL.")
         return
 
-    # Check disk space with our global lock to ensure safe operations (minimum 100MB free)
     with download_lock:
-        if not check_disk_space(100 * 1024 * 1024):
+        if not check_disk_space(100 * 1024 * 1024):  # Ensure at least 100MB free
             message.reply_text("System busy with downloads. Please wait a moment ⏳.")
             return
 
@@ -111,7 +117,7 @@ def handle_url(client, message):
     formats = result["formats"]
     title = result["title"]
 
-    # Build inline buttons for each available format including file size in MB.
+    # Build inline buttons for each available format including file size.
     buttons = []
     for fmt in formats:
         label = f"{fmt['ext']} | {fmt['resolution']} | {fmt['filesize_mb']}MB"
