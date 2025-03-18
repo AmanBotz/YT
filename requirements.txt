@@ -1,4 +1,4 @@
-pyrofork
+pyrogram
 tgcrypto
 yt-dlp
 ffmpeg-python
