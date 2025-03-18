@@ -23,7 +23,6 @@ download_requests = {}
 # Provided API credentials (API_ID as integer)
 API_ID = 23288918
 API_HASH = "fd2b1b2e0e6b2addf6e8031f15e511f2"
-# Set your bot token here or via environment variable.
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 
 # Owner's Telegram ID (as integer) and default cookies file path.
@@ -253,9 +252,7 @@ async def download_format(client, callback_query):
         return
 
     # Check if thumbnail exists and is non-empty.
-    thumb = None
-    if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
-        thumb = thumbnail_path
+    thumb = thumbnail_path if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0 else None
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
@@ -266,22 +263,39 @@ async def download_format(client, callback_query):
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
+        # Conditionally pass thumb only if it is valid.
         if info.get("ext") in ["mp3", "m4a", "webm"]:
-            await client.send_audio(
-                chat_id=callback_query.message.chat.id,
-                audio=file_path,
-                thumb=thumb,
-                caption=caption,
-                progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
-            )
+            if thumb:
+                await client.send_audio(
+                    chat_id=callback_query.message.chat.id,
+                    audio=file_path,
+                    thumb=thumb,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
+            else:
+                await client.send_audio(
+                    chat_id=callback_query.message.chat.id,
+                    audio=file_path,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
         else:
-            await client.send_video(
-                chat_id=callback_query.message.chat.id,
-                video=file_path,
-                thumb=thumb,
-                caption=caption,
-                progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
-            )
+            if thumb:
+                await client.send_video(
+                    chat_id=callback_query.message.chat.id,
+                    video=file_path,
+                    thumb=thumb,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
+            else:
+                await client.send_video(
+                    chat_id=callback_query.message.chat.id,
+                    video=file_path,
+                    caption=caption,
+                    progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
+                )
         await progress_message.delete()
     except Exception as e:
         await progress_message.edit_text(f"Error during upload: {str(e)}", parse_mode=ParseMode.HTML)
