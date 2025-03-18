@@ -23,7 +23,7 @@ download_requests = {}
 # Provided API credentials (API_ID as integer)
 API_ID = 23288918
 API_HASH = "fd2b1b2e0e6b2addf6e8031f15e511f2"
-# Set your bot token here or via an environment variable.
+# Set your bot token here or via environment variable.
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 
 # Owner's Telegram ID (as integer) and default cookies file path.
@@ -65,7 +65,7 @@ def to_small_caps(text):
 
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
-    # Try message.message_id, then message.id, then fallback to id(message)
+    # Use message.message_id if available, else message.id, else fallback to id(message)
     msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
     if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
         progress_last_update[msg_id] = now
@@ -177,7 +177,7 @@ async def dl_command(client, message):
     # Limit to the first 10 formats.
     formats = formats[:10]
 
-    # Create inline keyboard with two buttons per row.
+    # Build inline keyboard with two buttons per row.
     buttons = []
     row = []
     for i, fmt in enumerate(formats):
@@ -240,6 +240,7 @@ async def download_format(client, callback_query):
         probe = ffmpeg.probe(file_path)
         duration = float(probe["format"]["duration"])
         thumbnail_path = f"{file_path}.jpg"
+        # Generate thumbnail using ffmpeg.
         (
             ffmpeg
             .input(file_path, ss=duration/2)
@@ -251,8 +252,10 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
-    # Check if thumbnail exists; if not, set thumb to None.
-    thumb = thumbnail_path if os.path.exists(thumbnail_path) else None
+    # Check if thumbnail exists and is non-empty.
+    thumb = None
+    if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+        thumb = thumbnail_path
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
