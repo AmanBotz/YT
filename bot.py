@@ -1,4 +1,5 @@
 import os
+import io
 import asyncio
 import shutil
 import time
@@ -38,7 +39,7 @@ class HealthHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
-        
+
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -68,7 +69,6 @@ def to_small_caps(text):
 
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
-    # Use message.message_id if available, else message.id, else fallback to id(message)
     msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
     if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
         progress_last_update[msg_id] = now
@@ -243,7 +243,7 @@ async def download_format(client, callback_query):
         probe = ffmpeg.probe(file_path)
         duration = float(probe["format"]["duration"])
         thumbnail_path = f"{file_path}.jpg"
-        # Generate thumbnail using ffmpeg.
+        # Extract a thumbnail at half the video duration.
         (
             ffmpeg
             .input(file_path, ss=duration/2)
@@ -255,8 +255,17 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
-    # Check if thumbnail exists and is non-empty.
-    thumb = thumbnail_path if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0 else None
+    # Check if thumbnail exists and is nonempty.
+    if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+        # Read thumbnail file into a BytesIO object.
+        try:
+            with open(thumbnail_path, "rb") as f:
+                thumb_bytes = io.BytesIO(f.read())
+            thumb_bytes.name = os.path.basename(thumbnail_path)
+        except Exception as e:
+            thumb_bytes = None
+    else:
+        thumb_bytes = None
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
@@ -267,16 +276,16 @@ async def download_format(client, callback_query):
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
-        # Pass thumb as file path (if valid), else omit thumb parameter.
         if info.get("ext") in ["mp3", "m4a", "webm"]:
-            if thumb:
+            if thumb_bytes:
                 await client.send_audio(
                     chat_id=callback_query.message.chat.id,
                     audio=file_path,
-                    thumb=thumb,
+                    thumb=thumb_bytes,
                     caption=caption,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
+                thumb_bytes.close()
             else:
                 await client.send_audio(
                     chat_id=callback_query.message.chat.id,
@@ -285,14 +294,15 @@ async def download_format(client, callback_query):
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
         else:
-            if thumb:
+            if thumb_bytes:
                 await client.send_video(
                     chat_id=callback_query.message.chat.id,
                     video=file_path,
-                    thumb=thumb,
+                    thumb=thumb_bytes,
                     caption=caption,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
+                thumb_bytes.close()
             else:
                 await client.send_video(
                     chat_id=callback_query.message.chat.id,
@@ -306,12 +316,13 @@ async def download_format(client, callback_query):
     finally:
         try:
             os.remove(file_path)
-            if thumb and os.path.exists(thumb):
+            if os.path.exists(thumbnail_path):
                 os.remove(thumbnail_path)
         except Exception:
             pass
 
 if __name__ == "__main__":
+    import io  # Import here to ensure it's available
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
     if not os.path.exists("cookies"):
