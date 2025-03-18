@@ -11,6 +11,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
 import yt_dlp
 import ffmpeg
+from pyrogram.errors import MessageNotModified
 
 # Global variable to hold the main event loop.
 MAIN_LOOP = None
@@ -42,7 +43,6 @@ class HealthHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
-
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -70,6 +70,15 @@ def to_small_caps(text):
     }
     return "".join(small_caps_map.get(ch.lower(), ch) for ch in text)
 
+async def safe_edit_text(message, text, parse_mode=ParseMode.HTML):
+    try:
+        await message.edit_text(text, parse_mode=parse_mode)
+    except MessageNotModified:
+        pass
+    except Exception as e:
+        # Optionally log other exceptions.
+        pass
+
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
     msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
@@ -77,8 +86,8 @@ def progress_callback(current, total, message, action="Downloading"):
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-        # Schedule the edit_text coroutine on the main event loop using call_soon_threadsafe.
-        MAIN_LOOP.call_soon_threadsafe(asyncio.create_task, message.edit_text(f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML))
+        coro = safe_edit_text(message, f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML)
+        MAIN_LOOP.call_soon_threadsafe(asyncio.create_task, coro)
 
 def get_formats(url, cookie_file=None):
     ydl_opts = {
@@ -328,7 +337,6 @@ if __name__ == "__main__":
         os.makedirs("downloads")
     if not os.path.exists("cookies"):
         os.makedirs("cookies")
-    # Capture the main event loop.
     MAIN_LOOP = asyncio.get_event_loop()
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
