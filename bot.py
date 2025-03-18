@@ -169,7 +169,8 @@ async def handle_url(client, message):
         label = f"{fmt['ext']} | {fmt['resolution']} | {fmt['filesize_mb']}MB"
         buttons.append([InlineKeyboardButton(label, callback_data=f"dl|{fmt['format_id']}|{url}")])
     reply_markup = InlineKeyboardMarkup(buttons)
-    await message.reply_text(f"Select format for *{title}*:", reply_markup=reply_markup, parse_mode="markdown")
+    # Changed parse_mode from "markdown" to "md"
+    await message.reply_text(f"Select format for *{title}*:", reply_markup=reply_markup, parse_mode="md")
 
 @app.on_callback_query(filters.regex(r"^dl\|"))
 async def download_format(client, callback_query):
