@@ -17,7 +17,7 @@ download_lock = asyncio.Lock()
 progress_last_update = {}
 # Dictionary to store user-specific cookies file paths.
 user_cookies = {}
-# Dictionary to map unique tokens (32-char hex) to download request details.
+# Dictionary to map unique tokens (32-character hex) to download request details.
 download_requests = {}
 
 # Provided API credentials (API_ID as integer)
@@ -65,7 +65,7 @@ def to_small_caps(text):
 
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
-    # Use message.message_id if exists, else message.id, else id(message)
+    # Try message.message_id, then message.id, then fallback to id(message)
     msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
     if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
         progress_last_update[msg_id] = now
@@ -177,7 +177,7 @@ async def dl_command(client, message):
     # Limit to the first 10 formats.
     formats = formats[:10]
 
-    # Create two buttons per row.
+    # Create inline keyboard with two buttons per row.
     buttons = []
     row = []
     for i, fmt in enumerate(formats):
@@ -251,6 +251,9 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
+    # Check if thumbnail exists; if not, set thumb to None.
+    thumb = thumbnail_path if os.path.exists(thumbnail_path) else None
+
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
     resolution = info.get("resolution") or (f"{info.get('height', 'NA')}p" if info.get("height") else "audio")
@@ -264,7 +267,7 @@ async def download_format(client, callback_query):
             await client.send_audio(
                 chat_id=callback_query.message.chat.id,
                 audio=file_path,
-                thumb=thumbnail_path,
+                thumb=thumb,
                 caption=caption,
                 progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
             )
@@ -272,7 +275,7 @@ async def download_format(client, callback_query):
             await client.send_video(
                 chat_id=callback_query.message.chat.id,
                 video=file_path,
-                thumb=thumbnail_path,
+                thumb=thumb,
                 caption=caption,
                 progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
             )
@@ -282,7 +285,8 @@ async def download_format(client, callback_query):
     finally:
         try:
             os.remove(file_path)
-            os.remove(thumbnail_path)
+            if thumb:
+                os.remove(thumbnail_path)
         except Exception:
             pass
 
@@ -291,6 +295,7 @@ if __name__ == "__main__":
         os.makedirs("downloads")
     if not os.path.exists("cookies"):
         os.makedirs("cookies")
+    # Start the health check server in a separate thread.
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     app.run()
