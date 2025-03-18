@@ -70,13 +70,12 @@ def to_small_caps(text):
     }
     return "".join(small_caps_map.get(ch.lower(), ch) for ch in text)
 
-async def safe_edit_text(message, text, parse_mode=ParseMode.HTML):
+async def safe_edit_text(message, text):
     try:
-        await message.edit_text(text, parse_mode=parse_mode)
+        await message.edit_text(text, parse_mode=ParseMode.HTML)
     except MessageNotModified:
         pass
-    except Exception as e:
-        # Optionally log other exceptions.
+    except Exception:
         pass
 
 def progress_callback(current, total, message, action="Downloading"):
@@ -86,7 +85,7 @@ def progress_callback(current, total, message, action="Downloading"):
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-        coro = safe_edit_text(message, f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML)
+        coro = safe_edit_text(message, f"{action}... {bar} {percent:.2f}%")
         MAIN_LOOP.call_soon_threadsafe(asyncio.create_task, coro)
 
 def get_formats(url, cookie_file=None):
@@ -252,12 +251,19 @@ async def download_format(client, callback_query):
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
     try:
         probe = ffmpeg.probe(file_path)
-        duration = float(probe["format"]["duration"])
-        thumbnail_path = f"{file_path}.jpg"
+        duration_ffmpeg = float(probe["format"]["duration"])
+    except Exception:
+        duration_ffmpeg = 0
+    duration_info = info.get("duration", 0)
+    duration_sec = duration_ffmpeg if duration_ffmpeg > 0 else duration_info
+    duration_str = time.strftime('%H:%M:%S', time.gmtime(duration_sec))
+    
+    thumbnail_path = f"{file_path}.jpg"
+    try:
         # Extract a thumbnail at half the video duration.
         (
             ffmpeg
-            .input(file_path, ss=duration/2)
+            .input(file_path, ss=duration_sec/2)
             .filter("scale", 320, -1)
             .output(thumbnail_path, vframes=1)
             .run(quiet=True, overwrite_output=True)
@@ -275,15 +281,14 @@ async def download_format(client, callback_query):
             if thumb_data:
                 thumb_bytes = io.BytesIO(thumb_data)
                 thumb_bytes.name = os.path.basename(thumbnail_path)
-        except Exception as e:
+        except Exception:
             thumb_bytes = None
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
     resolution = info.get("resolution") or (f"{info.get('height', 'NA')}p" if info.get("height") else "audio")
     caption = f"{info.get('title', 'No Title')}\n"
-    blockquote = f"> {to_small_caps('size')}: {filesize_mb} | {to_small_caps('quality')}: {resolution}"
-    caption += blockquote
+    caption += f"<pre>> SIZE: {filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
@@ -294,6 +299,7 @@ async def download_format(client, callback_query):
                     audio=file_path,
                     thumb=thumb_bytes,
                     caption=caption,
+                    supports_streaming=True,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
                 thumb_bytes.close()
@@ -302,6 +308,7 @@ async def download_format(client, callback_query):
                     chat_id=callback_query.message.chat.id,
                     audio=file_path,
                     caption=caption,
+                    supports_streaming=True,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
         else:
@@ -311,6 +318,7 @@ async def download_format(client, callback_query):
                     video=file_path,
                     thumb=thumb_bytes,
                     caption=caption,
+                    supports_streaming=True,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
                 thumb_bytes.close()
@@ -319,6 +327,7 @@ async def download_format(client, callback_query):
                     chat_id=callback_query.message.chat.id,
                     video=file_path,
                     caption=caption,
+                    supports_streaming=True,
                     progress=lambda current, total: progress_callback(current, total, progress_message, action="Uploading")
                 )
         await progress_message.delete()
