@@ -13,7 +13,7 @@ import ffmpeg
 
 # Global asynchronous lock for download/disk operations.
 download_lock = asyncio.Lock()
-# Dictionary to store last progress update timestamp per message id.
+# Dictionary to store last progress update timestamp per message.
 progress_last_update = {}
 # Dictionary to store user-specific cookies file paths.
 user_cookies = {}
@@ -28,7 +28,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 
 # Owner's Telegram ID (as integer) and default cookies file path.
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-DEFAULT_COOKIE_FILE = os.getenv("DEFAULT_COOKIE")  # e.g. "cookies/owner_cookies.txt"
+DEFAULT_COOKIE_FILE = os.getenv("DEFAULT_COOKIE")  # e.g., "cookies/owner_cookies.txt"
 
 app = Client("yt_dlp_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -65,7 +65,8 @@ def to_small_caps(text):
 
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
-    msg_id = message.message_id
+    # Use message.message_id if exists, else message.id, else id(message)
+    msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
     if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
@@ -176,8 +177,10 @@ async def dl_command(client, message):
     # Limit to the first 10 formats.
     formats = formats[:10]
 
+    # Create two buttons per row.
     buttons = []
-    for fmt in formats:
+    row = []
+    for i, fmt in enumerate(formats):
         token = uuid.uuid4().hex  # 32-character token
         download_requests[token] = {
             "format_id": fmt["format_id"],
@@ -185,7 +188,12 @@ async def dl_command(client, message):
             "cookie_file": cookie_file
         }
         label = f"{fmt['ext']} | {fmt['resolution']} | {fmt['filesize_mb']}MB"
-        buttons.append([InlineKeyboardButton(label, callback_data=token)])
+        row.append(InlineKeyboardButton(label, callback_data=token))
+        if (i + 1) % 2 == 0:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
     reply_markup = InlineKeyboardMarkup(buttons)
     await message.reply_text(f"Select format for <b>{title}</b>:",
                              reply_markup=reply_markup,
@@ -283,7 +291,6 @@ if __name__ == "__main__":
         os.makedirs("downloads")
     if not os.path.exists("cookies"):
         os.makedirs("cookies")
-    # Start health check server in a separate thread for Koyeb's health checks.
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     app.run()
