@@ -249,6 +249,29 @@ async def download_format(client, callback_query):
             return
 
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
+
+    # If the downloaded format is video-only (acodec is "none"), download best audio and mux.
+    if info.get("acodec") == "none":
+        audio_opts = ydl_opts.copy()
+        audio_opts["format"] = "bestaudio"
+        try:
+            with yt_dlp.YoutubeDL(audio_opts) as audio_ydl:
+                audio_info = audio_ydl.extract_info(url, download=True)
+                audio_file = audio_ydl.prepare_filename(audio_info)
+        except Exception as e:
+            await progress_message.edit_text(f"Error during audio download: {str(e)}", parse_mode=ParseMode.HTML)
+            return
+        muxed_file = file_path.rsplit(".", 1)[0] + "_muxed.mp4"
+        try:
+            ffmpeg.input(file_path).input(audio_file).output(muxed_file, c="copy").run(quiet=True, overwrite_output=True)
+            os.remove(file_path)
+            os.remove(audio_file)
+            file_path = muxed_file
+        except Exception as e:
+            await progress_message.edit_text(f"Error during muxing: {str(e)}", parse_mode=ParseMode.HTML)
+            return
+
+    # Probe file for duration.
     try:
         probe = ffmpeg.probe(file_path)
         duration_ffmpeg = float(probe["format"]["duration"])
@@ -257,17 +280,11 @@ async def download_format(client, callback_query):
     duration_info = info.get("duration", 0)
     duration_sec = duration_ffmpeg if duration_ffmpeg > 0 else duration_info
     duration_str = time.strftime('%H:%M:%S', time.gmtime(duration_sec))
-    
+
     thumbnail_path = f"{file_path}.jpg"
     try:
         # Extract a thumbnail at half the video duration.
-        (
-            ffmpeg
-            .input(file_path, ss=duration_sec/2)
-            .filter("scale", 320, -1)
-            .output(thumbnail_path, vframes=1)
-            .run(quiet=True, overwrite_output=True)
-        )
+        ffmpeg.input(file_path, ss=duration_sec/2).filter("scale", 320, -1).output(thumbnail_path, vframes=1).run(quiet=True, overwrite_output=True)
     except Exception as e:
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
@@ -288,7 +305,8 @@ async def download_format(client, callback_query):
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
     resolution = info.get("resolution") or (f"{info.get('height', 'NA')}p" if info.get("height") else "audio")
     caption = f"{info.get('title', 'No Title')}\n"
-    caption += f"<pre>> SIZE: {filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
+    # Remove the extra < character by starting the pre tag normally.
+    caption += f"<pre>SIZE: {filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
