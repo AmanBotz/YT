@@ -12,6 +12,9 @@ from pyrogram.enums import ParseMode
 import yt_dlp
 import ffmpeg
 
+# Global variable to hold the main event loop.
+MAIN_LOOP = None
+
 # Global asynchronous lock for download/disk operations.
 download_lock = asyncio.Lock()
 # Store last progress update timestamp per message.
@@ -69,14 +72,15 @@ def to_small_caps(text):
 
 def progress_callback(current, total, message, action="Downloading"):
     now = time.time()
+    # Use message.message_id if available, else message.id, else fallback to id(message)
     msg_id = getattr(message, "message_id", None) or getattr(message, "id", None) or id(message)
     if msg_id not in progress_last_update or (now - progress_last_update[msg_id]) > 10:
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-        asyncio.create_task(
-            message.edit_text(f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML)
-        )
+        # Schedule the edit_text coroutine on the main event loop.
+        coro = message.edit_text(f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML)
+        asyncio.run_coroutine_threadsafe(coro, MAIN_LOOP)
 
 def get_formats(url, cookie_file=None):
     ydl_opts = {
@@ -243,7 +247,7 @@ async def download_format(client, callback_query):
         probe = ffmpeg.probe(file_path)
         duration = float(probe["format"]["duration"])
         thumbnail_path = f"{file_path}.jpg"
-        # Extract a thumbnail at half the video duration.
+        # Extract a thumbnail from the middle of the video.
         (
             ffmpeg
             .input(file_path, ss=duration/2)
@@ -255,17 +259,15 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
-    # Check if thumbnail exists and is nonempty.
+    # Load thumbnail into a BytesIO object if valid.
+    thumb_bytes = None
     if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
-        # Read thumbnail file into a BytesIO object.
         try:
             with open(thumbnail_path, "rb") as f:
                 thumb_bytes = io.BytesIO(f.read())
             thumb_bytes.name = os.path.basename(thumbnail_path)
         except Exception as e:
             thumb_bytes = None
-    else:
-        thumb_bytes = None
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
@@ -322,11 +324,12 @@ async def download_format(client, callback_query):
             pass
 
 if __name__ == "__main__":
-    import io  # Import here to ensure it's available
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
     if not os.path.exists("cookies"):
         os.makedirs("cookies")
+    # Capture the main event loop for scheduling tasks from background threads.
+    MAIN_LOOP = asyncio.get_event_loop()
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     app.run()
