@@ -2,7 +2,7 @@ import os
 import asyncio
 import shutil
 import subprocess
-from pyrofork import Client, filters
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
 import ffmpeg
