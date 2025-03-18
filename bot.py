@@ -85,7 +85,7 @@ def progress_callback(current, total, message, action="Downloading"):
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-        coro = safe_edit_text(message, f"{action}... {bar} {percent:.2f}%")
+        coro = safe_edit_text(message, f"{action}... {bar} {percent:.2f}%",)
         MAIN_LOOP.call_soon_threadsafe(asyncio.create_task, coro)
 
 def get_formats(url, cookie_file=None):
@@ -106,13 +106,17 @@ def get_formats(url, cookie_file=None):
     for fmt in formats:
         format_id = fmt.get("format_id")
         ext = fmt.get("ext")
-        resolution = fmt.get("resolution") or (f"{fmt.get('height', 'NA')}p" if fmt.get("height") else "audio")
+        # Try to extract resolution as height in p (if possible).
+        if fmt.get("height"):
+            res = f"{fmt.get('height')}p"
+        else:
+            res = fmt.get("resolution") or "audio"
         filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
         filesize_mb = round(filesize / (1024 * 1024), 2) if filesize else "Unknown"
         available.append({
             "format_id": format_id,
             "ext": ext,
-            "resolution": resolution,
+            "resolution": res,
             "filesize": filesize,
             "filesize_mb": filesize_mb
         })
@@ -200,6 +204,7 @@ async def dl_command(client, message):
             "url": url,
             "cookie_file": cookie_file
         }
+        # Use short resolution (e.g. "240p", "480p", etc.)
         label = f"{fmt['ext']} | {fmt['resolution']} | {fmt['filesize_mb']}MB"
         row.append(InlineKeyboardButton(label, callback_data=token))
         if (i + 1) % 2 == 0:
@@ -250,7 +255,7 @@ async def download_format(client, callback_query):
 
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
 
-    # If video has no audio (video-only), download best audio and mux them.
+    # If video is video-only, download best audio and mux them.
     if info.get("acodec") == "none":
         audio_opts = ydl_opts.copy()
         audio_opts["format"] = "bestaudio"
@@ -261,12 +266,11 @@ async def download_format(client, callback_query):
         except Exception as e:
             await progress_message.edit_text(f"Error during audio download: {str(e)}", parse_mode=ParseMode.HTML)
             return
-        muxed_file = file_path.rsplit('.', 1)[0] + "_muxed.mp4"
+        muxed_file = file_path.rsplit(".", 1)[0] + "_muxed.mp4"
         try:
-            # Create separate input streams for video and audio and mux them.
             video_stream = ffmpeg.input(file_path)
             audio_stream = ffmpeg.input(audio_file)
-            ffmpeg.output(video_stream, audio_stream, muxed_file, c="copy").run(quiet=True, overwrite_output=True)
+            ffmpeg.output(video_stream, audio_stream, muxed_file, c="copy", movflags="+faststart").run(quiet=True, overwrite_output=True)
             os.remove(file_path)
             os.remove(audio_file)
             file_path = muxed_file
@@ -274,7 +278,16 @@ async def download_format(client, callback_query):
             await progress_message.edit_text(f"Error during muxing: {str(e)}", parse_mode=ParseMode.HTML)
             return
 
-    # Probe file for duration.
+    # Re-mux (even if not needed) to update metadata.
+    remuxed_file = file_path.rsplit(".", 1)[0] + "_remuxed." + file_path.rsplit(".", 1)[1]
+    try:
+        ffmpeg.input(file_path).output(remuxed_file, c="copy", movflags="+faststart").run(quiet=True, overwrite_output=True)
+        os.remove(file_path)
+        file_path = remuxed_file
+    except Exception:
+        pass
+
+    # Probe for duration and final file size.
     try:
         probe = ffmpeg.probe(file_path)
         duration_ffmpeg = float(probe["format"]["duration"])
@@ -283,6 +296,8 @@ async def download_format(client, callback_query):
     duration_info = info.get("duration", 0)
     duration_sec = duration_ffmpeg if duration_ffmpeg > 0 else duration_info
     duration_str = time.strftime('%H:%M:%S', time.gmtime(duration_sec))
+    final_filesize = os.path.getsize(file_path)
+    final_filesize_mb = f"{round(final_filesize / (1024*1024), 2)}MB"
 
     thumbnail_path = f"{file_path}.jpg"
     try:
@@ -291,7 +306,7 @@ async def download_format(client, callback_query):
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
-    # Load thumbnail into a BytesIO object if valid.
+    # Load thumbnail into BytesIO if valid.
     thumb_bytes = None
     if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
         try:
@@ -303,11 +318,9 @@ async def download_format(client, callback_query):
         except Exception:
             thumb_bytes = None
 
-    filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
-    filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
     resolution = info.get("resolution") or (f"{info.get('height', 'NA')}p" if info.get("height") else "audio")
     caption = f"{info.get('title', 'No Title')}\n"
-    caption += f"<pre>SIZE: {filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
+    caption += f"<pre>SIZE: {final_filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
