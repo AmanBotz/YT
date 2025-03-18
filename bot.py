@@ -106,7 +106,7 @@ def get_formats(url, cookie_file=None):
     for fmt in formats:
         format_id = fmt.get("format_id")
         ext = fmt.get("ext")
-        # Use original resolution info (do not convert to short form).
+        # Use the original resolution string.
         res = fmt.get("resolution") or "audio"
         filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
         filesize_mb = round(filesize / (1024 * 1024), 2) if filesize else "Unknown"
@@ -201,7 +201,6 @@ async def dl_command(client, message):
             "url": url,
             "cookie_file": cookie_file
         }
-        # Use the original resolution string.
         label = f"{fmt['ext']} | {fmt.get('resolution', 'audio')} | {fmt['filesize_mb']}MB"
         row.append(InlineKeyboardButton(label, callback_data=token))
         if (i + 1) % 2 == 0:
@@ -252,7 +251,7 @@ async def download_format(client, callback_query):
 
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
 
-    # If the downloaded file is video-only, download best audio and mux.
+    # If video has no audio, download best audio and mux them.
     if info.get("acodec") == "none":
         audio_opts = ydl_opts.copy()
         audio_opts["format"] = "bestaudio"
@@ -275,10 +274,10 @@ async def download_format(client, callback_query):
             await progress_message.edit_text(f"Error during muxing: {str(e)}", parse_mode=ParseMode.HTML)
             return
 
-    # Re-mux to update metadata.
+    # Re-mux to update metadata by forcing audio re-encoding.
     remuxed_file = file_path.rsplit(".", 1)[0] + "_remuxed." + file_path.rsplit(".", 1)[1]
     try:
-        ffmpeg.input(file_path).output(remuxed_file, c="copy", movflags="+faststart").run(quiet=True, overwrite_output=True)
+        ffmpeg.input(file_path).output(remuxed_file, c_v="copy", c_a="aac", movflags="+faststart").run(quiet=True, overwrite_output=True)
         os.remove(file_path)
         file_path = remuxed_file
     except Exception:
@@ -316,7 +315,7 @@ async def download_format(client, callback_query):
     final_filesize = os.path.getsize(file_path)
     final_filesize_mb = f"{round(final_filesize / (1024*1024), 2)}MB"
 
-    # For caption, we now show only the title so that Telegram shows duration from metadata.
+    # Set caption to just the title so Telegram displays its own metadata.
     caption = info.get("title", "No Title")
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
