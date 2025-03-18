@@ -250,7 +250,7 @@ async def download_format(client, callback_query):
 
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
 
-    # If the downloaded format is video-only (acodec is "none"), download best audio and mux.
+    # If video has no audio (video-only), download best audio and mux them.
     if info.get("acodec") == "none":
         audio_opts = ydl_opts.copy()
         audio_opts["format"] = "bestaudio"
@@ -261,9 +261,12 @@ async def download_format(client, callback_query):
         except Exception as e:
             await progress_message.edit_text(f"Error during audio download: {str(e)}", parse_mode=ParseMode.HTML)
             return
-        muxed_file = file_path.rsplit(".", 1)[0] + "_muxed.mp4"
+        muxed_file = file_path.rsplit('.', 1)[0] + "_muxed.mp4"
         try:
-            ffmpeg.input(file_path).input(audio_file).output(muxed_file, c="copy").run(quiet=True, overwrite_output=True)
+            # Create separate input streams for video and audio and mux them.
+            video_stream = ffmpeg.input(file_path)
+            audio_stream = ffmpeg.input(audio_file)
+            ffmpeg.output(video_stream, audio_stream, muxed_file, c="copy").run(quiet=True, overwrite_output=True)
             os.remove(file_path)
             os.remove(audio_file)
             file_path = muxed_file
@@ -283,7 +286,6 @@ async def download_format(client, callback_query):
 
     thumbnail_path = f"{file_path}.jpg"
     try:
-        # Extract a thumbnail at half the video duration.
         ffmpeg.input(file_path, ss=duration_sec/2).filter("scale", 320, -1).output(thumbnail_path, vframes=1).run(quiet=True, overwrite_output=True)
     except Exception as e:
         await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
@@ -305,7 +307,6 @@ async def download_format(client, callback_query):
     filesize_mb = f"{round(filesize_bytes / (1024*1024), 2)}MB" if filesize_bytes else "Unknown"
     resolution = info.get("resolution") or (f"{info.get('height', 'NA')}p" if info.get("height") else "audio")
     caption = f"{info.get('title', 'No Title')}\n"
-    # Remove the extra < character by starting the pre tag normally.
     caption += f"<pre>SIZE: {filesize_mb} | QUALITY: {resolution} | DURATION: {duration_str}</pre>"
 
     await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
