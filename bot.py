@@ -13,12 +13,18 @@ import ffmpeg
 download_lock = asyncio.Lock()
 # Dictionary to store last progress update timestamp per message id.
 progress_last_update = {}
+# Dictionary to store user-specific cookies file paths.
+user_cookies = {}
 
 # Provided API credentials (API_ID as integer)
 API_ID = 23288918
 API_HASH = "fd2b1b2e0e6b2addf6e8031f15e511f2"
 # Set your bot token here or via environment variable.
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
+
+# Owner's Telegram ID (as integer) and default cookies file path.
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+DEFAULT_COOKIE_FILE = os.getenv("DEFAULT_COOKIE")  # e.g., "cookies/owner_cookies.txt"
 
 app = Client("yt_dlp_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -63,16 +69,18 @@ def progress_callback(current, total, message, action="Downloading"):
         progress_last_update[msg_id] = now
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
-        # Schedule the async edit without awaiting directly.
+        # Schedule async edit without awaiting directly.
         asyncio.create_task(message.edit_text(f"{action}... {bar} {percent:.2f}%"))
 
-def get_formats(url):
-    """Extract video/audio formats using yt-dlp."""
+def get_formats(url, cookie_file=None):
+    """Extract video/audio formats using yt-dlp, optionally using a cookies file."""
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
         'no_warnings': True,
     }
+    if cookie_file:
+        ydl_opts['cookiefile'] = cookie_file
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -97,17 +105,40 @@ def get_formats(url):
     return {"formats": available, "title": title, "info": info}, None
 
 # ---------------------------
-# Bot Handlers
+# Bot Command Handlers
 # ---------------------------
 @app.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
         "Welcome to the yt-dlp Bot 🤖!\n"
         "Send me a video URL from any supported site, then choose your desired format.\n"
-        "You'll see real-time progress updates, and your media will be sent with proper metadata!"
+        "You can set your own cookies with /setcookies (if needed), otherwise the default cookies will be used."
     )
 
-@app.on_message(filters.text & ~filters.command("start"))
+@app.on_message(filters.command("setcookies"))
+async def set_cookies(client, message):
+    user_id = message.from_user.id
+    if len(message.command) > 1:
+        # Use text provided after the command as cookie content.
+        cookie_text = message.text.split(None, 1)[1]
+        if not os.path.exists("cookies"):
+            os.makedirs("cookies")
+        cookie_file = f"cookies/cookies_{user_id}.txt"
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(cookie_text)
+        user_cookies[user_id] = cookie_file
+        await message.reply_text("Your cookies have been set.")
+    elif message.document:
+        # Download the attached document as cookie file.
+        if not os.path.exists("cookies"):
+            os.makedirs("cookies")
+        file_path = await message.download(file_name=f"cookies/cookies_{user_id}.txt")
+        user_cookies[user_id] = file_path
+        await message.reply_text("Your cookies file has been set.")
+    else:
+        await message.reply_text("Usage: /setcookies <cookie content> or send a cookie file.")
+
+@app.on_message(filters.text & ~filters.command("start") & ~filters.command("setcookies"))
 async def handle_url(client, message):
     url = message.text.strip()
     if not (url.startswith("http://") or url.startswith("https://")):
@@ -119,10 +150,12 @@ async def handle_url(client, message):
             await message.reply_text("System busy with downloads. Please wait a moment ⏳.")
             return
 
-    result, error = get_formats(url)
+    # Determine which cookie file to use: user-specific if set, otherwise default.
+    cookie_file = user_cookies.get(message.from_user.id, DEFAULT_COOKIE_FILE)
+    result, error = get_formats(url, cookie_file=cookie_file)
     if error:
         if "login" in error.lower() or "authorization" in error.lower():
-            await message.reply_text("This URL requires login or authorization. Please provide a valid URL.")
+            await message.reply_text("This URL requires login or authorization. Please set your cookies with /setcookies or provide a valid URL.")
         else:
             await message.reply_text(f"Error: {error}")
         return
@@ -149,6 +182,9 @@ async def download_format(client, callback_query):
     await callback_query.answer("Download started.")
     progress_message = await callback_query.message.reply_text("Starting download... ⏳")
 
+    # Determine cookie file for this request.
+    cookie_file = user_cookies.get(callback_query.from_user.id, DEFAULT_COOKIE_FILE)
+
     async with download_lock:
         out_template = "downloads/%(id)s.%(ext)s"
         ydl_opts = {
@@ -161,6 +197,8 @@ async def download_format(client, callback_query):
             'quiet': True,
             'no_warnings': True,
         }
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -223,6 +261,8 @@ async def download_format(client, callback_query):
 if __name__ == "__main__":
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
+    if not os.path.exists("cookies"):
+        os.makedirs("cookies")
     # Start health check server in a separate thread so Koyeb's TCP check on port 8000 passes.
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
