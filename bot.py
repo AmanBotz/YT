@@ -6,6 +6,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ParseMode
 import yt_dlp
 import ffmpeg
 
@@ -70,7 +71,7 @@ def progress_callback(current, total, message, action="Downloading"):
         percent = (current / total) * 100 if total else 0
         bar = "🔵" * int(percent // 10) + "⚪" * (10 - int(percent // 10))
         # Schedule async edit without awaiting directly.
-        asyncio.create_task(message.edit_text(f"{action}... {bar} {percent:.2f}%", parse_mode="html"))
+        asyncio.create_task(message.edit_text(f"{action}... {bar} {percent:.2f}%", parse_mode=ParseMode.HTML))
 
 def get_formats(url, cookie_file=None):
     """Extract video/audio formats using yt-dlp, optionally using a cookies file."""
@@ -110,10 +111,10 @@ def get_formats(url, cookie_file=None):
 @app.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
-        "Welcome to the yt-dlp Bot 🤖!\n"
-        "Use /dl <URL> to download a video from any supported site.\n"
-        "You can set your own cookies with /setcookies if needed, otherwise the default cookies will be used.",
-        parse_mode="html"
+        "Welcome to the yt-dlp Bot 🤖!<br>"
+        "Use <b>/dl &lt;URL&gt;</b> to download a video from any supported site.<br>"
+        "You can set your own cookies with <b>/setcookies</b> if needed, otherwise the default cookies will be used.",
+        parse_mode=ParseMode.HTML
     )
 
 @app.on_message(filters.command("setcookies"))
@@ -128,31 +129,31 @@ async def set_cookies(client, message):
         with open(cookie_file, "w", encoding="utf-8") as f:
             f.write(cookie_text)
         user_cookies[user_id] = cookie_file
-        await message.reply_text("Your cookies have been set.", parse_mode="html")
+        await message.reply_text("Your cookies have been set.", parse_mode=ParseMode.HTML)
     elif message.document:
         # Download the attached document as cookie file.
         if not os.path.exists("cookies"):
             os.makedirs("cookies")
         file_path = await message.download(file_name=f"cookies/cookies_{user_id}.txt")
         user_cookies[user_id] = file_path
-        await message.reply_text("Your cookies file has been set.", parse_mode="html")
+        await message.reply_text("Your cookies file has been set.", parse_mode=ParseMode.HTML)
     else:
-        await message.reply_text("Usage: /setcookies <cookie content> or send a cookie file.", parse_mode="html")
+        await message.reply_text("Usage: /setcookies <cookie content> or send a cookie file.", parse_mode=ParseMode.HTML)
 
 @app.on_message(filters.command("dl"))
 async def dl_command(client, message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.reply_text("Usage: /dl <URL>", parse_mode="html")
+        await message.reply_text("Usage: /dl <URL>", parse_mode=ParseMode.HTML)
         return
     url = parts[1].strip()
     if not (url.startswith("http://") or url.startswith("https://")):
-        await message.reply_text("Please provide a valid URL.", parse_mode="html")
+        await message.reply_text("Please provide a valid URL.", parse_mode=ParseMode.HTML)
         return
 
     async with download_lock:
         if not check_disk_space(100 * 1024 * 1024):  # Ensure at least 100MB free
-            await message.reply_text("System busy with downloads. Please wait a moment ⏳.", parse_mode="html")
+            await message.reply_text("System busy with downloads. Please wait a moment ⏳.", parse_mode=ParseMode.HTML)
             return
 
     # Determine which cookie file to use: user-specific if set, otherwise default.
@@ -160,9 +161,12 @@ async def dl_command(client, message):
     result, error = get_formats(url, cookie_file=cookie_file)
     if error:
         if "login" in error.lower() or "authorization" in error.lower():
-            await message.reply_text("This URL requires login or authorization. Please set your cookies with /setcookies or provide a valid URL.", parse_mode="html")
+            await message.reply_text(
+                "This URL requires login or authorization. Please set your cookies with /setcookies or provide a valid URL.",
+                parse_mode=ParseMode.HTML
+            )
         else:
-            await message.reply_text(f"Error: {error}", parse_mode="html")
+            await message.reply_text(f"Error: {error}", parse_mode=ParseMode.HTML)
         return
 
     formats = result["formats"]
@@ -174,7 +178,9 @@ async def dl_command(client, message):
         label = f"{fmt['ext']} | {fmt['resolution']} | {fmt['filesize_mb']}MB"
         buttons.append([InlineKeyboardButton(label, callback_data=f"dl|{fmt['format_id']}|{url}")])
     reply_markup = InlineKeyboardMarkup(buttons)
-    await message.reply_text(f"Select format for <b>{title}</b>:", reply_markup=reply_markup, parse_mode="html")
+    await message.reply_text(f"Select format for <b>{title}</b>:",
+                             reply_markup=reply_markup,
+                             parse_mode=ParseMode.HTML)
 
 @app.on_callback_query(filters.regex(r"^dl\|"))
 async def download_format(client, callback_query):
@@ -185,7 +191,8 @@ async def download_format(client, callback_query):
     format_id = data[1]
     url = data[2]
     await callback_query.answer("Download started.")
-    progress_message = await callback_query.message.reply_text("Starting download... ⏳", parse_mode="html")
+    progress_message = await callback_query.message.reply_text("Starting download... ⏳",
+                                                                 parse_mode=ParseMode.HTML)
 
     # Determine cookie file for this request.
     cookie_file = user_cookies.get(callback_query.from_user.id, DEFAULT_COOKIE_FILE)
@@ -208,7 +215,7 @@ async def download_format(client, callback_query):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
         except Exception as e:
-            await progress_message.edit_text(f"Error during download: {str(e)}", parse_mode="html")
+            await progress_message.edit_text(f"Error during download: {str(e)}", parse_mode=ParseMode.HTML)
             return
 
     file_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
@@ -225,7 +232,7 @@ async def download_format(client, callback_query):
             .run(quiet=True, overwrite_output=True)
         )
     except Exception as e:
-        await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode="html")
+        await progress_message.edit_text(f"Error processing media: {str(e)}", parse_mode=ParseMode.HTML)
         return
 
     filesize_bytes = info.get("filesize") or info.get("filesize_approx") or 0
@@ -235,7 +242,7 @@ async def download_format(client, callback_query):
     blockquote = f"> {to_small_caps('size')}: {filesize_mb} | {to_small_caps('quality')}: {resolution}"
     caption += blockquote
 
-    await progress_message.edit_text("Uploading... ⏳", parse_mode="html")
+    await progress_message.edit_text("Uploading... ⏳", parse_mode=ParseMode.HTML)
     try:
         if info.get("ext") in ["mp3", "m4a", "webm"]:
             await client.send_audio(
@@ -255,7 +262,7 @@ async def download_format(client, callback_query):
             )
         await progress_message.delete()
     except Exception as e:
-        await progress_message.edit_text(f"Error during upload: {str(e)}", parse_mode="html")
+        await progress_message.edit_text(f"Error during upload: {str(e)}", parse_mode=ParseMode.HTML)
     finally:
         try:
             os.remove(file_path)
